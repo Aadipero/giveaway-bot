@@ -1,3 +1,4 @@
+
 import os
 import json
 import sqlite3
@@ -20,7 +21,7 @@ from aiogram.types import (
     FSInputFile
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8993449962:AAHMgr5vcbqsF8uXs8xhVrGvt37OQXbdkgY")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8993449962:AAHfcaeYqf3DhFESsc3OWjOHIoegdxOxPns")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8423151783"))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 PORT = int(os.getenv("PORT", 8080))
@@ -101,6 +102,15 @@ bot = Bot(
 )
 dp = Dispatcher(storage=MemoryStorage())
 
+def main_menu():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🎁 Refer & Earn"), KeyboardButton(text="🏆 Top 20 Leaderboard")],
+            [KeyboardButton(text="💳 Update UPI"), KeyboardButton(text="📊 My Stats")]
+        ],
+        resize_keyboard=True
+    )
+
 async def get_unjoined_channels(user_id: int):
     cursor.execute("SELECT chat_id, title, invite_link, channel_type FROM channels")
     channels = cursor.fetchall()
@@ -131,6 +141,7 @@ async def webapp_handler(request):
         h2 { font-size: 22px; margin-bottom: 12px; }
         p { font-size: 14px; line-height: 1.5; color: #94a3b8; margin-bottom: 28px; }
         .btn { background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%); color: #fff; border: none; width: 100%; padding: 14px 20px; font-size: 16px; font-weight: 600; border-radius: 14px; cursor: pointer; }
+        .btn:disabled { opacity: 0.6; }
     </style>
 </head>
 <body>
@@ -140,36 +151,97 @@ async def webapp_handler(request):
         </div>
         <h2>Device Verification</h2>
         <p>Complete single-device authorization to unlock full referral rewards & instant voucher claims.</p>
-        <button class="btn" onclick="verifyDevice()">Verify Device Now</button>
+        <button id="vbtn" class="btn" onclick="verifyDevice()">Verify Device Now</button>
     </div>
     <script>
-        let tg = window.Telegram.WebApp; tg.ready(); tg.expand();
+        let tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
         function generateFingerprint() {
             let canvas = document.createElement('canvas');
             let ctx = canvas.getContext('2d');
-            ctx.textBaseline = "top"; ctx.font = "14px 'Arial'"; ctx.fillStyle = "#f60"; ctx.fillRect(125,1,62,20);
-            ctx.fillStyle = "#069"; ctx.fillText("fingerprint_auth", 2, 15);
+            ctx.textBaseline = "top"; ctx.font = "14px Arial"; ctx.fillStyle = "#f60"; ctx.fillRect(125,1,62,20);
+            ctx.fillStyle = "#069"; ctx.fillText("fp_auth", 2, 15);
             let hw = screen.width + 'x' + screen.height + 'x' + (navigator.hardwareConcurrency || 4) + 'x' + (navigator.deviceMemory || 4);
             return btoa(canvas.toDataURL() + hw);
         }
-        function verifyDevice() {
+
+        async function verifyDevice() {
+            let btn = document.getElementById("vbtn");
+            btn.disabled = true;
+            btn.innerText = "Verifying...";
+            
             let fp = generateFingerprint();
-            tg.sendData(JSON.stringify({ action: "verify_device", device_id: fp }));
-            tg.close();
+            let user = tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
+            if (!user || !user.id) {
+                alert("Telegram User ID detect nahi hui. Bot ko dobara /start karein.");
+                btn.disabled = false;
+                btn.innerText = "Verify Device Now";
+                return;
+            }
+
+            try {
+                let res = await fetch("/api/verify", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({ user_id: user.id, device_id: fp })
+                });
+                let data = await res.json();
+                if (data.status === "ok") {
+                    tg.close();
+                } else {
+                    alert(data.message || "Verification failed!");
+                    btn.disabled = false;
+                    btn.innerText = "Verify Device Now";
+                }
+            } catch(e) {
+                alert("Network error, dobara try karein.");
+                btn.disabled = false;
+                btn.innerText = "Verify Device Now";
+            }
         }
     </script>
 </body>
 </html>"""
     return web.Response(text=html, content_type="text/html")
 
-def main_menu():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎁 Refer & Earn"), KeyboardButton(text="🏆 Top 20 Leaderboard")],
-            [KeyboardButton(text="💳 Update UPI"), KeyboardButton(text="📊 My Stats")]
-        ],
-        resize_keyboard=True
-    )
+async def api_verify_handler(request):
+    try:
+        data = await request.json()
+        user_id = data.get("user_id")
+        device_id = data.get("device_id")
+
+        if not user_id or not device_id:
+            return web.json_response({"status": "error", "message": "Invalid request parameters"})
+
+        cursor.execute("SELECT user_id FROM users WHERE device_id = ? AND user_id != ?", (device_id, user_id))
+        if cursor.fetchone():
+            await bot.send_message(user_id, f"{e('cross')} <b>Verification Failed!</b>\nYeh device already registered hai.")
+            return web.json_response({"status": "error", "message": "Device already registered!"})
+
+        cursor.execute("UPDATE users SET verified = 1, device_id = ? WHERE user_id = ?", (device_id, user_id))
+        conn.commit()
+
+        unjoined = await get_unjoined_channels(user_id)
+        if unjoined:
+            buttons = [[InlineKeyboardButton(text=f"{e('channel')} Join {title}", url=link)] for title, link in unjoined]
+            buttons.append([InlineKeyboardButton(text=f"{e('check')} I Have Joined", callback_data="check_channels")])
+            await bot.send_message(
+                user_id,
+                f"{e('check')} <b>Device Verified Successfully!</b>\n\n{e('stop')} <b>Channel Membership Required</b>\nGiveaway access karne ke liye channels join karein:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+            )
+        else:
+            await bot.send_message(
+                user_id,
+                f"{e('check')} <b>Device Verified Successfully!</b>\n{e('party')} <b>Welcome to the Giveaway!</b>",
+                reply_markup=main_menu()
+            )
+
+        return web.json_response({"status": "ok"})
+    except Exception as err:
+        return web.json_response({"status": "error", "message": str(err)})
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
@@ -191,7 +263,8 @@ async def start_cmd(message: types.Message):
     is_verified = cursor.fetchone()[0]
 
     if not is_verified:
-        verify_url = f"{RENDER_URL}/verify" if RENDER_URL else "http://localhost:8080/verify"
+        base_url = RENDER_URL.rstrip("/") if RENDER_URL else "http://localhost:8080"
+        verify_url = f"{base_url}/verify"
         markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛡️ Verify Device Now", web_app=WebAppInfo(url=verify_url))]])
         await message.answer(f"{e('warning')} <b>Device Verification Required!</b>\n\nEk device se sirf ek account verify ho sakta hai.\nNeeche button par click karein:", reply_markup=markup)
         return
@@ -204,24 +277,6 @@ async def start_cmd(message: types.Message):
         return
 
     await message.answer(f"{e('party')} <b>Welcome to the Giveaway!</b>\n\n• <b>Top 1-5:</b> Mega Bonus Prize\n• <b>Rank 6-20:</b> Standard Prize", reply_markup=main_menu())
-
-@dp.message(F.web_app_data)
-async def webapp_receive(message: types.Message):
-    user_id = message.from_user.id
-    try:
-        data = json.loads(message.web_app_data.data)
-        if data.get("action") == "verify_device":
-            device_id = data.get("device_id")
-            cursor.execute("SELECT user_id FROM users WHERE device_id = ? AND user_id != ?", (device_id, user_id))
-            if cursor.fetchone():
-                await message.answer(f"{e('cross')} <b>Verification Failed!</b>\nYeh device already registered hai.")
-                return
-            cursor.execute("UPDATE users SET verified = 1, device_id = ? WHERE user_id = ?", (device_id, user_id))
-            conn.commit()
-            await message.answer(f"{e('check')} <b>Device Verified Successfully!</b>")
-            await start_cmd(message)
-    except Exception:
-        await message.answer(f"{e('cross')} Verification error. Try again.")
 
 @dp.callback_query(F.data == "check_channels")
 async def check_joined_cb(query: types.CallbackQuery):
@@ -246,14 +301,15 @@ async def top20_view(message: types.Message):
     for i, (name, count) in enumerate(rows, start=1):
         tier = f"{e('party')} <i>(Super Reward)</i>" if i <= 5 else ""
         text += f"<b>#{i} {name}</b> — {count} Invites {tier}\n"
-    await message.answer(text)
+    await message.answer(text if rows else "Abhi koi rank data nahi hai.")
 
 @dp.message(F.text == "📊 My Stats")
 async def stats_view(message: types.Message):
     cursor.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ? AND verified = 1", (message.from_user.id,))
     total = cursor.fetchone()[0]
     cursor.execute("SELECT upi_id FROM users WHERE user_id = ?", (message.from_user.id,))
-    upi = cursor.fetchone()[0] or "Not set"
+    upi_res = cursor.fetchone()
+    upi = upi_res[0] if upi_res and upi_res[0] else "Not set"
     await message.answer(f"{e('stats')} <b>Stats:</b>\n• <b>Invites:</b> {total}\n• <b>UPI:</b> <code>{upi}</code>")
 
 @dp.message(F.text == "💳 Update UPI")
@@ -265,14 +321,14 @@ async def upi_entry(message: types.Message, state: FSMContext):
 async def upi_save(message: types.Message, state: FSMContext):
     upi = message.text.strip()
     if "@" not in upi:
-        await message.answer(f"{e('warning')} Valid UPI address dalein.")
+        await message.answer(f"{e('warning')} Valid UPI address dalein (jaise user@upi).")
         return
     cursor.execute("UPDATE users SET upi_id = ? WHERE user_id = ?", (upi, message.from_user.id))
     conn.commit()
     await state.clear()
     await message.answer(f"{e('check')} Saved: <code>{upi}</code>")
 
-# --- ADMIN PANEL ---
+# --- ADMIN COMMANDS ---
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -302,38 +358,36 @@ async def adm_add_type(query: types.CallbackQuery):
         [InlineKeyboardButton(text="Public Channel", callback_data="ctype_public")],
         [InlineKeyboardButton(text="Private Channel", callback_data="ctype_private")]
     ])
-    await query.message.answer("Channel ka type choose karein:", reply_markup=markup)
+    await query.message.answer("Channel type select karein:", reply_markup=markup)
 
 @dp.callback_query(F.data.startswith("ctype_"))
 async def adm_type_chosen(query: types.CallbackQuery, state: FSMContext):
-    chosen_type = query.data.replace("ctype_", "")
-    await state.update_data(c_type=chosen_type)
+    await state.update_data(c_type=query.data.replace("ctype_", ""))
     await state.set_state(AdminStates.add_channel_title)
-    await query.message.answer(f"Channel ka <b>Display Name</b> bhejein:")
+    await query.message.answer("Channel ka <b>Display Name</b> bhejein:")
 
 @dp.message(AdminStates.add_channel_title)
 async def adm_got_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text.strip())
     await state.set_state(AdminStates.add_channel_id)
-    await message.answer("Channel ka <b>Chat ID</b> ya <b>Username</b> bhejein (Example: <code>@mychannel</code> ya <code>-1001234567890</code>):\n<i>(Dhyan rahe bot channel me Admin hona chahiye)</i>")
+    await message.answer("Channel ki <b>Chat ID</b> ya <b>Username</b> bhejein (Example: <code>@mychannel</code> ya <code>-1001234567890</code>):")
 
 @dp.message(AdminStates.add_channel_id)
 async def adm_got_id(message: types.Message, state: FSMContext):
     await state.update_data(chat_id=message.text.strip())
     await state.set_state(AdminStates.add_channel_link)
-    await message.answer("Channel ka <b>Invite Link</b> bhejein (e.g. <code>https://t.me/mychannel</code> ya private link):")
+    await message.answer("Channel ka <b>Invite Link</b> bhejein:")
 
 @dp.message(AdminStates.add_channel_link)
 async def adm_got_link(message: types.Message, state: FSMContext):
-    link = message.text.strip()
     data = await state.get_data()
     cursor.execute(
         "INSERT INTO channels (title, chat_id, invite_link, channel_type) VALUES (?, ?, ?, ?)",
-        (data["title"], data["chat_id"], link, data["c_type"])
+        (data["title"], data["chat_id"], message.text.strip(), data["c_type"])
     )
     conn.commit()
     await state.clear()
-    await message.answer(f"{e('check')} <b>Channel successfully add ho gaya!</b>\nTitle: {data['title']}\nID: <code>{data['chat_id']}</code>")
+    await message.answer(f"{e('check')} <b>Channel successfully add ho gaya!</b>\nTitle: {data['title']}")
 
 @dp.callback_query(F.data == "adm_export")
 async def adm_export(query: types.CallbackQuery):
@@ -347,9 +401,9 @@ async def adm_export(query: types.CallbackQuery):
         f.write(content)
     await query.message.answer_document(FSInputFile("top20.txt"), caption=f"{e('party')} Top 20 Winners!")
 
-# --- AUTO PING TASK ---
+# --- BACKGROUND AUTO-PING ---
 async def auto_ping_worker():
-    await asyncio.sleep(30)
+    await asyncio.sleep(20)
     target_url = RENDER_URL if RENDER_URL else f"http://localhost:{PORT}"
     if not target_url.endswith("/"):
         target_url += "/"
@@ -361,12 +415,13 @@ async def auto_ping_worker():
                     pass
             except Exception:
                 pass
-            await asyncio.sleep(600)  # Har 10 minute me ping
+            await asyncio.sleep(600)
 
 async def start_web():
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bot is online!"))
     app.router.add_get("/verify", webapp_handler)
+    app.router.add_post("/api/verify", api_verify_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
