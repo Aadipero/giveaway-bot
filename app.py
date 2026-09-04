@@ -17,8 +17,8 @@ from aiogram.types import (
     FSInputFile
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8993449962:AAGB8ZtkHL_b77Za4o3QuseARs5jAHLgm0E)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "8423151783"))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 PORT = int(os.getenv("PORT", 8080))
 
