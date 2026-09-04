@@ -2,6 +2,7 @@ import os
 import json
 import sqlite3
 import asyncio
+import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command, CommandStart
@@ -24,7 +25,6 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "8423151783"))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 PORT = int(os.getenv("PORT", 8080))
 
-# Standard free Unicode emojis (No Premium rights required)
 EMOJIS = {
     "party": "🎉",
     "stop": "🛑",
@@ -272,50 +272,68 @@ async def upi_save(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"{e('check')} Saved: <code>{upi}</code>")
 
+# --- ADMIN PANEL ---
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"{e('admin_add')} Add Channel", callback_data="adm_add_ch")],
+        [InlineKeyboardButton(text=f"{e('channel')} View Channels", callback_data="adm_list_ch")],
         [InlineKeyboardButton(text=f"{e('stats')} Export Top 20 (with UPI)", callback_data="adm_export")]
     ])
     await message.answer(f"{e('gear')} <b>Admin Panel</b>", reply_markup=markup)
 
+@dp.callback_query(F.data == "adm_list_ch")
+async def adm_list_channels(query: types.CallbackQuery):
+    cursor.execute("SELECT id, title, chat_id, channel_type FROM channels")
+    rows = cursor.fetchall()
+    if not rows:
+        await query.message.answer("Koi channel add nahi hai.")
+        return
+    text = f"{e('channel')} <b>Added Channels:</b>\n\n"
+    for cid, title, chat_id, ctype in rows:
+        text += f"• <b>{title}</b> | ID: <code>{chat_id}</code> | Type: {ctype}\n"
+    await query.message.answer(text)
+
 @dp.callback_query(F.data == "adm_add_ch")
 async def adm_add_type(query: types.CallbackQuery):
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Public", callback_data="ctype_public")],
-        [InlineKeyboardButton(text="Private", callback_data="ctype_private")],
-        [InlineKeyboardButton(text="Join Request", callback_data="ctype_join_request")]
+        [InlineKeyboardButton(text="Public Channel", callback_data="ctype_public")],
+        [InlineKeyboardButton(text="Private Channel", callback_data="ctype_private")]
     ])
-    await query.message.answer("Channel type:", reply_markup=markup)
+    await query.message.answer("Channel ka type choose karein:", reply_markup=markup)
 
 @dp.callback_query(F.data.startswith("ctype_"))
 async def adm_type_chosen(query: types.CallbackQuery, state: FSMContext):
-    await state.update_data(c_type=query.data.replace("ctype_", ""))
+    chosen_type = query.data.replace("ctype_", "")
+    await state.update_data(c_type=chosen_type)
     await state.set_state(AdminStates.add_channel_title)
-    await query.message.answer("Channel Name dalein:")
+    await query.message.answer(f"Channel ka <b>Display Name</b> bhejein:")
 
 @dp.message(AdminStates.add_channel_title)
 async def adm_got_title(message: types.Message, state: FSMContext):
-    await state.update_data(title=message.text)
+    await state.update_data(title=message.text.strip())
     await state.set_state(AdminStates.add_channel_id)
-    await message.answer("Channel ID/Username dalein:")
+    await message.answer("Channel ka <b>Chat ID</b> ya <b>Username</b> bhejein (Example: <code>@mychannel</code> ya <code>-1001234567890</code>):\n<i>(Dhyan rahe bot channel me Admin hona chahiye)</i>")
 
 @dp.message(AdminStates.add_channel_id)
 async def adm_got_id(message: types.Message, state: FSMContext):
-    await state.update_data(chat_id=message.text)
+    await state.update_data(chat_id=message.text.strip())
     await state.set_state(AdminStates.add_channel_link)
-    await message.answer("Channel Link dalein:")
+    await message.answer("Channel ka <b>Invite Link</b> bhejein (e.g. <code>https://t.me/mychannel</code> ya private link):")
 
 @dp.message(AdminStates.add_channel_link)
 async def adm_got_link(message: types.Message, state: FSMContext):
+    link = message.text.strip()
     data = await state.get_data()
-    cursor.execute("INSERT INTO channels (title, chat_id, invite_link, channel_type) VALUES (?, ?, ?, ?)", (data["title"], data["chat_id"], message.text, data["c_type"]))
+    cursor.execute(
+        "INSERT INTO channels (title, chat_id, invite_link, channel_type) VALUES (?, ?, ?, ?)",
+        (data["title"], data["chat_id"], link, data["c_type"])
+    )
     conn.commit()
     await state.clear()
-    await message.answer(f"{e('check')} Channel added!")
+    await message.answer(f"{e('check')} <b>Channel successfully add ho gaya!</b>\nTitle: {data['title']}\nID: <code>{data['chat_id']}</code>")
 
 @dp.callback_query(F.data == "adm_export")
 async def adm_export(query: types.CallbackQuery):
@@ -329,6 +347,22 @@ async def adm_export(query: types.CallbackQuery):
         f.write(content)
     await query.message.answer_document(FSInputFile("top20.txt"), caption=f"{e('party')} Top 20 Winners!")
 
+# --- AUTO PING TASK ---
+async def auto_ping_worker():
+    await asyncio.sleep(30)
+    target_url = RENDER_URL if RENDER_URL else f"http://localhost:{PORT}"
+    if not target_url.endswith("/"):
+        target_url += "/"
+    
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(target_url, timeout=10) as resp:
+                    pass
+            except Exception:
+                pass
+            await asyncio.sleep(600)  # Har 10 minute me ping
+
 async def start_web():
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bot is online!"))
@@ -339,6 +373,7 @@ async def start_web():
 
 async def main():
     await start_web()
+    asyncio.create_task(auto_ping_worker())
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
