@@ -8,6 +8,8 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -93,7 +95,10 @@ class AdminStates(StatesGroup):
 class UserStates(StatesGroup):
     entering_upi = State()
 
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher(storage=MemoryStorage())
 
 async def get_unjoined_channels(user_id: int):
