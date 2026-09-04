@@ -24,39 +24,39 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "8423151783"))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 PORT = int(os.getenv("PORT", 8080))
 
+# Standard free Unicode emojis (No Premium rights required)
 EMOJIS = {
-    "party": "5989848973974704652",
-    "stop": "5974083768233760323",
-    "wave": "4983292515932177130",
-    "check": "5980930633298350051",
-    "cross": "6158841463032519010",
-    "warning": "5787656288934564517",
-    "link": "5292122921035133343",
-    "stats": "5431577498364158238",
-    "people": "5402211308017840657",
-    "box": "5415750994849976302",
-    "green": "5416081784641168838",
-    "red": "5420323339723881652",
-    "yellow": "5789570564448326827",
-    "gear": "5341715473882955310",
-    "plus": "5226945370684140473",
-    "megaphone": "5836698068061261980",
-    "hourglass": "5451646226975955576",
-    "repeat": "5264727218734524899",
-    "fire": "5424972470023104089",
-    "ref_link": "5271604874419647061",
-    "claim": "5449816553727998023",
-    "referrals": "5985525762973768278",
-    "channel": "6035277294036061660",
-    "admin_add": "6034851808805918335",
-    "stock": "5294118392905623955",
-    "broadcast": "5780405967527089720",
-    "users": "5985525762973768278",
+    "party": "🎉",
+    "stop": "🛑",
+    "wave": "👋",
+    "check": "✅",
+    "cross": "❌",
+    "warning": "⚠️",
+    "link": "🔗",
+    "stats": "📊",
+    "people": "👥",
+    "box": "📦",
+    "green": "🟢",
+    "red": "🔴",
+    "yellow": "🟡",
+    "gear": "⚙️",
+    "plus": "➕",
+    "megaphone": "📢",
+    "hourglass": "⏳",
+    "repeat": "🔄",
+    "fire": "🔥",
+    "ref_link": "🔗",
+    "claim": "🎁",
+    "referrals": "👥",
+    "channel": "📢",
+    "admin_add": "➕",
+    "stock": "📦",
+    "broadcast": "📢",
+    "users": "👥",
 }
 
 def e(name):
-    emoji_id = EMOJIS.get(name)
-    return f'<tg-emoji id="{emoji_id}">🔹</tg-emoji>' if emoji_id else "🔹"
+    return EMOJIS.get(name, "🔹")
 
 conn = sqlite3.connect("giveaway.db", check_same_thread=False)
 cursor = conn.cursor()
