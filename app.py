@@ -1,4 +1,3 @@
-
 import os
 import json
 import sqlite3
@@ -21,7 +20,7 @@ from aiogram.types import (
     FSInputFile
 )
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8993449962:AAHfcaeYqf3DhFESsc3OWjOHIoegdxOxPns")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8993449962:AAEITPGEz4W23Jc9NbMuHnFHHTH4NjAOIK4")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8423151783"))
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 PORT = int(os.getenv("PORT", 8080))
@@ -213,7 +212,14 @@ async def api_verify_handler(request):
         device_id = data.get("device_id")
 
         if not user_id or not device_id:
-            return web.json_response({"status": "error", "message": "Invalid request parameters"})
+            return web.json_response({"status": "error", "message": "Invalid parameters"})
+
+        # Check if already verified
+        cursor.execute("SELECT verified, referrer_id, full_name FROM users WHERE user_id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        already_verified = user_row[0] if user_row else 0
+        referrer_id = user_row[1] if user_row else None
+        new_user_name = user_row[2] if user_row and user_row[2] else "User"
 
         cursor.execute("SELECT user_id FROM users WHERE device_id = ? AND user_id != ?", (device_id, user_id))
         if cursor.fetchone():
@@ -222,6 +228,20 @@ async def api_verify_handler(request):
 
         cursor.execute("UPDATE users SET verified = 1, device_id = ? WHERE user_id = ?", (device_id, user_id))
         conn.commit()
+
+        # Send instant notification to Referrer if this was a new verification
+        if not already_verified and referrer_id:
+            try:
+                cursor.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ? AND verified = 1", (referrer_id,))
+                total_invites = cursor.fetchone()[0]
+                await bot.send_message(
+                    referrer_id,
+                    f"{e('party')} <b>New Referral Joined!</b>\n\n"
+                    f"👤 <b>{new_user_name}</b> ne aapke link se join karke verification complete kiya.\n"
+                    f"📊 Total Verified Invites: <b>{total_invites}</b>"
+                )
+            except Exception:
+                pass
 
         unjoined = await get_unjoined_channels(user_id)
         if unjoined:
@@ -251,12 +271,16 @@ async def start_cmd(message: types.Message):
     args = message.text.split()[1:] if len(message.text.split()) > 1 else []
     referrer_id = int(args[0]) if args and args[0].isdigit() and int(args[0]) != user_id else None
 
-    cursor.execute("SELECT verified, device_id FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT verified, device_id, referrer_id FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     if not row:
         cursor.execute("INSERT INTO users (user_id, username, full_name, referrer_id) VALUES (?, ?, ?, ?)", (user_id, username, full_name, referrer_id))
     else:
-        cursor.execute("UPDATE users SET username = ?, full_name = ? WHERE user_id = ?", (username, full_name, user_id))
+        # If user already exists but had no referrer, update it
+        if not row[2] and referrer_id:
+            cursor.execute("UPDATE users SET username = ?, full_name = ?, referrer_id = ? WHERE user_id = ?", (username, full_name, referrer_id, user_id))
+        else:
+            cursor.execute("UPDATE users SET username = ?, full_name = ? WHERE user_id = ?", (username, full_name, user_id))
     conn.commit()
 
     cursor.execute("SELECT verified FROM users WHERE user_id = ?", (user_id,))
@@ -291,17 +315,33 @@ async def check_joined_cb(query: types.CallbackQuery):
 async def refer_view(message: types.Message):
     me = await bot.get_me()
     ref_link = f"https://t.me/{me.username}?start={message.from_user.id}"
-    await message.answer(f"{e('ref_link')} <b>Referral Link:</b>\n<code>{ref_link}</code>", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{e('link')} Share", url=f"https://t.me/share/url?url={ref_link}")]]))
+    await message.answer(
+        f"{e('ref_link')} <b>Referral Link:</b>\n<code>{ref_link}</code>\n\nApne friends ko share karein aur rewards earn karein!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{e('link')} Share Link", url=f"https://t.me/share/url?url={ref_link}")]])
+    )
 
 @dp.message(F.text == "🏆 Top 20 Leaderboard")
 async def top20_view(message: types.Message):
-    cursor.execute("SELECT u.full_name, COUNT(r.user_id) as total FROM users u LEFT JOIN users r ON u.user_id = r.referrer_id AND r.verified = 1 GROUP BY u.user_id ORDER BY total DESC LIMIT 20")
+    cursor.execute("""
+        SELECT u.full_name, COUNT(r.user_id) as total 
+        FROM users u 
+        INNER JOIN users r ON u.user_id = r.referrer_id 
+        WHERE r.verified = 1 
+        GROUP BY u.user_id 
+        ORDER BY total DESC 
+        LIMIT 20
+    """)
     rows = cursor.fetchall()
+    
+    if not rows:
+        await message.answer(f"{e('fire')} <b>TOP 20 LEADERBOARD</b>\n\nAbhi tak kisi ke verified referrals nahi hain!")
+        return
+
     text = f"{e('fire')} <b>TOP 20 LEADERBOARD</b>\n\n"
     for i, (name, count) in enumerate(rows, start=1):
         tier = f"{e('party')} <i>(Super Reward)</i>" if i <= 5 else ""
         text += f"<b>#{i} {name}</b> — {count} Invites {tier}\n"
-    await message.answer(text if rows else "Abhi koi rank data nahi hai.")
+    await message.answer(text)
 
 @dp.message(F.text == "📊 My Stats")
 async def stats_view(message: types.Message):
@@ -310,25 +350,25 @@ async def stats_view(message: types.Message):
     cursor.execute("SELECT upi_id FROM users WHERE user_id = ?", (message.from_user.id,))
     upi_res = cursor.fetchone()
     upi = upi_res[0] if upi_res and upi_res[0] else "Not set"
-    await message.answer(f"{e('stats')} <b>Stats:</b>\n• <b>Invites:</b> {total}\n• <b>UPI:</b> <code>{upi}</code>")
+    await message.answer(f"{e('stats')} <b>Stats:</b>\n• <b>Verified Invites:</b> {total}\n• <b>UPI ID:</b> <code>{upi}</code>")
 
 @dp.message(F.text == "💳 Update UPI")
 async def upi_entry(message: types.Message, state: FSMContext):
     await state.set_state(UserStates.entering_upi)
-    await message.answer(f"{e('claim')} Apni UPI ID bhejein:")
+    await message.answer(f"{e('claim')} Apni UPI ID bhejein (Example: <code>user@oksbi</code>):")
 
 @dp.message(UserStates.entering_upi)
 async def upi_save(message: types.Message, state: FSMContext):
     upi = message.text.strip()
     if "@" not in upi:
-        await message.answer(f"{e('warning')} Valid UPI address dalein (jaise user@upi).")
+        await message.answer(f"{e('warning')} Valid UPI address dalein.")
         return
     cursor.execute("UPDATE users SET upi_id = ? WHERE user_id = ?", (upi, message.from_user.id))
     conn.commit()
     await state.clear()
-    await message.answer(f"{e('check')} Saved: <code>{upi}</code>")
+    await message.answer(f"{e('check')} UPI ID successfully save ho gayi:\n<code>{upi}</code>")
 
-# --- ADMIN COMMANDS ---
+# --- ADMIN PANEL ---
 @dp.message(Command("admin"))
 async def admin_cmd(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -358,7 +398,7 @@ async def adm_add_type(query: types.CallbackQuery):
         [InlineKeyboardButton(text="Public Channel", callback_data="ctype_public")],
         [InlineKeyboardButton(text="Private Channel", callback_data="ctype_private")]
     ])
-    await query.message.answer("Channel type select karein:", reply_markup=markup)
+    await query.message.answer("Channel type choose karein:", reply_markup=markup)
 
 @dp.callback_query(F.data.startswith("ctype_"))
 async def adm_type_chosen(query: types.CallbackQuery, state: FSMContext):
@@ -370,7 +410,7 @@ async def adm_type_chosen(query: types.CallbackQuery, state: FSMContext):
 async def adm_got_title(message: types.Message, state: FSMContext):
     await state.update_data(title=message.text.strip())
     await state.set_state(AdminStates.add_channel_id)
-    await message.answer("Channel ki <b>Chat ID</b> ya <b>Username</b> bhejein (Example: <code>@mychannel</code> ya <code>-1001234567890</code>):")
+    await message.answer("Channel ID/Username bhejein (e.g. <code>@channelname</code> ya <code>-100xxxxxxx</code>):")
 
 @dp.message(AdminStates.add_channel_id)
 async def adm_got_id(message: types.Message, state: FSMContext):
@@ -391,7 +431,15 @@ async def adm_got_link(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_export")
 async def adm_export(query: types.CallbackQuery):
-    cursor.execute("SELECT u.user_id, u.full_name, u.username, u.upi_id, COUNT(r.user_id) as invites FROM users u LEFT JOIN users r ON u.user_id = r.referrer_id AND r.verified = 1 GROUP BY u.user_id ORDER BY invites DESC LIMIT 20")
+    cursor.execute("""
+        SELECT u.user_id, u.full_name, u.username, u.upi_id, COUNT(r.user_id) as invites 
+        FROM users u 
+        INNER JOIN users r ON u.user_id = r.referrer_id 
+        WHERE r.verified = 1 
+        GROUP BY u.user_id 
+        ORDER BY invites DESC 
+        LIMIT 20
+    """)
     rows = cursor.fetchall()
     content = "TOP 20 WINNERS\n\n"
     for r, (uid, name, uname, upi, inv) in enumerate(rows, start=1):
@@ -401,7 +449,7 @@ async def adm_export(query: types.CallbackQuery):
         f.write(content)
     await query.message.answer_document(FSInputFile("top20.txt"), caption=f"{e('party')} Top 20 Winners!")
 
-# --- BACKGROUND AUTO-PING ---
+# --- AUTO PING WORKER ---
 async def auto_ping_worker():
     await asyncio.sleep(20)
     target_url = RENDER_URL if RENDER_URL else f"http://localhost:{PORT}"
